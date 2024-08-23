@@ -1,0 +1,245 @@
+-- Services
+local Players = game:GetService("Players")
+local Camera = workspace.CurrentCamera
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+
+-- Constants
+local SCREEN_WIDTH = Camera.ViewportSize.X
+local SCREEN_HEIGHT = Camera.ViewportSize.Y
+local UPDATE_INTERVAL = 0.0 -- Decrease interval for faster updates
+local PREDICTION_FACTOR = 0.161 -- Factor to adjust the prediction accuracy
+
+-- Variables
+local focusing = false
+local targetPlayer = nil
+local focusButton
+local dragging = false
+local dragInput, dragStart, startPos
+local blurEffect, messageLabel, shadowLabel, inquiryLabel
+
+-- Create UI elements
+local function createUI()
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Parent = game:GetService("CoreGui")
+
+    -- Create blur effect
+    blurEffect = Instance.new("BlurEffect")
+    blurEffect.Size = 0
+    blurEffect.Parent = Camera
+
+    -- Create the shadow for the large message
+    shadowLabel = Instance.new("TextLabel")
+    shadowLabel.Size = UDim2.new(1, 0, 1, 0)
+    shadowLabel.Position = UDim2.new(0, 4, 0, 4) -- Offset for shadow effect
+    shadowLabel.Text = "MADE BY QUEC"
+    shadowLabel.TextColor3 = Color3.new(0, 0, 0) -- Shadow color
+    shadowLabel.Font = Enum.Font.GothamBlack
+    shadowLabel.TextScaled = true
+    shadowLabel.BackgroundTransparency = 1
+    shadowLabel.TextTransparency = 0.5 -- Slight transparency to blend with shadow
+    shadowLabel.Parent = screenGui
+
+    -- Create the large message
+    messageLabel = Instance.new("TextLabel")
+    messageLabel.Size = UDim2.new(1, 0, 1, 0)
+    messageLabel.Position = UDim2.new(0, 0, 0, 0)
+    messageLabel.Text = "MADE BY QUEC"
+    messageLabel.TextColor3 = Color3.new(1, 0, 0)
+    messageLabel.Font = Enum.Font.GothamBlack
+    messageLabel.TextScaled = true
+    messageLabel.BackgroundTransparency = 1
+    messageLabel.Parent = screenGui
+
+    -- Create the small inquiry text
+    inquiryLabel = Instance.new("TextLabel")
+    inquiryLabel.Size = UDim2.new(1, 0, 0, 50)
+    inquiryLabel.Position = UDim2.new(0, 0, 0.85, 0) -- Positioned slightly below the large text
+    inquiryLabel.Text = "fnss on the blue app for any inquiries"
+    inquiryLabel.TextColor3 = Color3.new(0, 1, 0) -- Green text
+    inquiryLabel.TextStrokeColor3 = Color3.new(0, 0, 0) -- Black outline
+    inquiryLabel.TextStrokeTransparency = 0.5
+    inquiryLabel.Font = Enum.Font.Gotham
+    inquiryLabel.TextScaled = true
+    inquiryLabel.BackgroundTransparency = 1
+    inquiryLabel.Parent = screenGui
+
+    -- Create focus button
+    focusButton = Instance.new("TextButton")
+    focusButton.Size = UDim2.new(0, 100, 0, 50)
+    focusButton.Position = UDim2.new(0.5, -50, 0.9, -25)
+    focusButton.Text = "quecslock"
+    focusButton.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+    focusButton.Visible = false -- Initially hide the button
+    focusButton.Parent = screenGui
+end
+
+-- Function to display and hide the intro message
+local function showIntroMessage()
+    -- Blur the screen
+    local blurTween = TweenService:Create(blurEffect, TweenInfo.new(1), {Size = 24})
+    blurTween:Play()
+
+    -- Fade the text to make it look faded
+    local textFadeTween = TweenService:Create(messageLabel, TweenInfo.new(1), {TextTransparency = 0.5})
+    textFadeTween:Play()
+
+    local shadowFadeTween = TweenService:Create(shadowLabel, TweenInfo.new(1), {TextTransparency = 0.7})
+    shadowFadeTween:Play()
+
+    local inquiryFadeTween = TweenService:Create(inquiryLabel, TweenInfo.new(1), {TextTransparency = 0.5})
+    inquiryFadeTween:Play()
+
+    -- After 5 seconds, fade out the text and remove blur
+    delay(5, function()
+        local unblurTween = TweenService:Create(blurEffect, TweenInfo.new(1), {Size = 0})
+        unblurTween:Play()
+
+        local textFadeOutTween = TweenService:Create(messageLabel, TweenInfo.new(1), {TextTransparency = 1})
+        textFadeOutTween:Play()
+
+        local shadowFadeOutTween = TweenService:Create(shadowLabel, TweenInfo.new(1), {TextTransparency = 1})
+        shadowFadeOutTween:Play()
+
+        local inquiryFadeOutTween = TweenService:Create(inquiryLabel, TweenInfo.new(1), {TextTransparency = 1})
+        inquiryFadeOutTween:Play()
+
+        -- Make the focus button visible after the transition
+        unblurTween.Completed:Connect(function()
+            messageLabel:Destroy()
+            shadowLabel:Destroy()
+            inquiryLabel:Destroy()
+            blurEffect:Destroy()
+            focusButton.Visible = true -- Show the button
+        end)
+    end)
+end
+
+-- Function to get the closest player's torso to the crosshair
+local function getClosestPlayer()
+    local closestPlayer = nil
+    local shortestDistance = math.huge
+
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= Players.LocalPlayer and player.Character then
+            local humanoidRootPart = player.Character:FindFirstChild("HumanoidRootPart")
+            if humanoidRootPart then
+                local screenPoint = Camera:WorldToScreenPoint(humanoidRootPart.Position)
+                local distance = (Vector2.new(screenPoint.X, screenPoint.Y) - Vector2.new(SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2)).magnitude
+                if distance < shortestDistance then
+                    closestPlayer = player
+                    shortestDistance = distance
+                end
+            end
+        end
+    end
+
+    return closestPlayer
+end
+
+-- Function to start or stop focusing on the closest player
+local function toggleFocus()
+    if focusing then
+        focusing = false
+    else
+        local closestPlayer = getClosestPlayer()
+        if closestPlayer then
+            local character = closestPlayer.Character
+            local torso = character and character:FindFirstChild("HumanoidRootPart")
+            if torso then
+                targetPlayer = closestPlayer
+                focusing = true
+            end
+        end
+    end
+end
+
+-- Update camera orientation while focusing with prediction
+local function updateCamera()
+    if focusing and targetPlayer then
+        local character = targetPlayer.Character
+        local torso = character and character:FindFirstChild("HumanoidRootPart")
+        if torso then
+            local currentPos = torso.Position
+            local velocity = torso.Velocity
+
+            -- Predict the future position based on velocity and prediction factor
+            local futurePos = currentPos + velocity * PREDICTION_FACTOR
+
+            -- Directly set the camera's look direction to the predicted position
+            local newLookVector = (futurePos - Camera.CFrame.Position).unit
+            Camera.CFrame = CFrame.new(Camera.CFrame.Position, Camera.CFrame.Position + newLookVector)
+        end
+    end
+end
+
+-- Button drag functionality (supports both mouse and touch inputs)
+local function onInputBegan(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = focusButton.Position
+        dragInput = input
+    end
+end
+
+local function onInputChanged(input)
+    if dragging and input == dragInput then
+        local delta = input.Position - dragStart
+        focusButton.Position = UDim2.new(
+            startPos.X.Scale, startPos.X.Offset + delta.X,
+            startPos.Y.Scale, startPos.Y.Offset + delta.Y
+        )
+    end
+end
+
+local function onInputEnded(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
+end
+
+-- Connect the button click event
+local function setupButton()
+    if not focusButton then
+        createUI()
+    end
+    focusButton.MouseButton1Click:Connect(toggleFocus)
+    focusButton.InputBegan:Connect(onInputBegan)
+    focusButton.InputChanged:Connect(onInputChanged)
+    focusButton.InputEnded:Connect(onInputEnded)
+end
+
+-- Handle key input for toggling focus
+local function onKeyPress(input, gameProcessed)
+    if not gameProcessed and input.KeyCode == Enum.KeyCode.C then
+        toggleFocus()
+    end
+end
+
+-- Continuously update the camera orientation
+local function startUpdating()
+    RunService.Heartbeat:Connect(function()
+        updateCamera()
+        wait(UPDATE_INTERVAL)
+    end)
+end
+
+-- Initialize the script
+local function init()
+    -- Ensure UI is set up
+    setupButton()
+
+    -- Show intro message with blur effect
+    showIntroMessage()
+
+    -- Connect key press event
+    UserInputService.InputBegan:Connect(onKeyPress)
+
+    -- Start updating the camera
+    startUpdating()
+end
+
+-- Initialize the script initially
+init()
